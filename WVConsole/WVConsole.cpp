@@ -55,7 +55,7 @@ int main()
 	GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
 
 	auto progman = FindWindow(L"Progman", NULL);
-	ULONG result;
+	ULONG_PTR result;
 	SendMessageTimeout(progman, 0x052C, NULL, NULL, SMTO_NORMAL, 1000, &result);
 
 	EnumWindows(EnumWindowsCallback, NULL);
@@ -66,7 +66,7 @@ int main()
 
 	while (true) {
 		drawWallVideo();
-		Sleep(5);
+		Sleep(2);
 	}
 
     return 0;
