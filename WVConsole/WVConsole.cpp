@@ -10,7 +10,8 @@ extern "C"
 };
 
 #include <windows.h>
-
+#include <gl\GL.h>
+#include <gl\GLU.h>
 #include <winuser.h>
 
 #include <shellapi.h>
@@ -19,6 +20,8 @@ extern "C"
 #include <memory>
 
 #pragma comment(lib, "Gdiplus.lib")
+#pragma comment(lib, "opengl32.lib")
+#pragma comment(lib, "glu32.lib")
 
 using namespace std;
 using namespace Gdiplus;
@@ -36,6 +39,12 @@ AVPacket        packet;
 int             frameFinished;
 //float           aspect_ratio;
 
+HWND hwnd;
+HDC hdc;
+float angle;
+HGLRC hrc;
+unsigned int tex;
+
 static int midWidth;
 
 static int screenHeight;
@@ -49,6 +58,72 @@ ULONG_PTR gdiplusToken;
 BOOL CALLBACK EnumWindowsCallback(HWND tophandle, LPARAM topparamhandle);
 void drawWallVideo();
 int initFfmpeg();
+
+
+void resize()
+{
+	RECT rec;
+	GetClientRect(hwnd, &rec);
+	float width = 400;
+	float height = 400;
+	GLfloat fieldOfView = 60.0f;
+	glViewport(0, 0, rec.right, rec.bottom);
+
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	gluPerspective(fieldOfView, (GLfloat)width / (GLfloat)height, 0.1, 500.0);
+
+
+	glMatrixMode(GL_MODELVIEW);
+	glEnable(GL_TEXTURE_2D);
+	glLoadIdentity();
+}
+
+void EnableOpenGL(HWND hwnd, HDC* hDC, HGLRC* hRC);
+
+void init()
+{
+	GLubyte pixels[12] = {
+		0, 0, 0,   1, 1, 1,
+		1, 1, 1,   0, 0, 0
+	};
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+}
+
+void draw()
+{
+	angle -= 1.f;
+	float rtri = 0;
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glTranslatef(0, 0, -5);
+	glRotatef(angle, 0, 1, 0);
+	glBindTexture(GL_TEXTURE_2D, tex);
+
+	glBegin(GL_QUADS);
+	glColor3f(0, 1, 0);
+	glTexCoord2f(0.0, 0.0);
+	glVertex3f(0.0, 0.0, 0.0);
+	glTexCoord2f(1.0, 0.0);
+	glVertex3f(1.0, 0.0, 0.0);
+	glTexCoord2f(1.0, 1.0);
+	glVertex3f(1.0, 1.0, 0.0);
+	glTexCoord2f(0.0, 1.0);
+	glVertex3f(0.0, 1.0, 0.0);
+	glEnd();
+	glDisable(GL_TEXTURE_2D);
+
+	auto res = SwapBuffers(hdc);
+	res = GetLastError();
+	cout << GetLastError();
+}
 
 int main()
 {
@@ -64,8 +139,16 @@ int main()
 		return -1;
 	}
 
+	hwnd = workerw;
+	hdc = GetDCEx(workerw, NULL, 0x403);
+	EnableOpenGL(hwnd, &hdc, &hrc);
+	init();
+	resize();
+	cout<< hrc;
+
 	while (true) {
-		drawWallVideo();
+		//drawWallVideo();
+		draw();
 		Sleep(2);
 	}
 
@@ -193,4 +276,33 @@ void drawWallVideo() {
 		//grahics.FillRectangle(&blackBrush, 0, 0, width, height);
 	}
 	ReleaseDC(workerw, dc);
+}
+
+
+void EnableOpenGL(HWND hwnd, HDC* hDC, HGLRC* hRC)
+{
+	PIXELFORMATDESCRIPTOR pfd;
+
+	int iFormat;
+
+	*hDC = GetDC(hwnd);
+
+	ZeroMemory(&pfd, sizeof(pfd));
+
+	pfd.nSize = sizeof(pfd);
+	pfd.nVersion = 1;
+	pfd.dwFlags = PFD_DRAW_TO_WINDOW |
+		PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+	pfd.iPixelType = PFD_TYPE_RGBA;
+	pfd.cColorBits = 24;
+	pfd.cDepthBits = 16;
+	pfd.iLayerType = PFD_MAIN_PLANE;
+
+	iFormat = ChoosePixelFormat(*hDC, &pfd);
+
+	SetPixelFormat(*hDC, iFormat, &pfd);
+
+	*hRC = wglCreateContext(*hDC);
+
+	wglMakeCurrent(*hDC, *hRC);
 }
