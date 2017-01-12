@@ -1,4 +1,4 @@
-// WVConsole.cpp : Defines the entry point for the console application.
+﻿// WVConsole.cpp : Defines the entry point for the console application.
 //
 
 extern "C"
@@ -10,8 +10,11 @@ extern "C"
 };
 
 #include <windows.h>
-#include <gl\GL.h>
-#include <gl\GLU.h>
+
+#include <GL/glew.h>
+#pragma comment(lib, "opengl32.lib")
+#pragma comment(lib, "glu32.lib")
+
 #include <winuser.h>
 
 #include <shellapi.h>
@@ -20,8 +23,7 @@ extern "C"
 #include <memory>
 
 #pragma comment(lib, "Gdiplus.lib")
-#pragma comment(lib, "opengl32.lib")
-#pragma comment(lib, "glu32.lib")
+
 
 using namespace std;
 using namespace Gdiplus;
@@ -39,12 +41,55 @@ AVPacket        packet;
 int             frameFinished;
 //float           aspect_ratio;
 
+
+const GLchar* SHADER = R"(
+uniform vec2 center;
+uniform vec2 resolution;
+uniform float time;
+
+void main(void)
+{
+    vec2 p = 2.0 * (gl_FragCoord.xy - center.xy) / resolution.xy;
+	p.x *= resolution.x/resolution.y;
+
+	float zoo = .62+.38*sin(.1*time);
+	float coa = cos( 0.1*(1.0-zoo)*time );
+	float sia = sin( 0.1*(1.0-zoo)*time );
+	zoo = pow( zoo,8.0);
+	vec2 xy = vec2( p.x*coa-p.y*sia, p.x*sia+p.y*coa);
+	vec2 cc = vec2(-.745,.186) + xy*zoo;
+
+	vec2 z  = vec2(0.0);
+	vec2 z2 = z*z;
+	float m2;
+	float co = 0.0;
+
+	for( int i=0; i<256; i++ )
+	{
+		z = cc + vec2( z.x*z.x - z.y*z.y, 2.0*z.x*z.y );
+		m2 = dot(z,z);
+		if( m2>1024.0 ) break;
+		co += 1.0;
+	}
+	co = co + 1.0 - log2(.5*log2(m2));
+
+	co = sqrt(co/256.0);
+	gl_FragColor = vec4( .5+.5*cos(6.2831*co+0.0),
+						.5+.5*cos(6.2831*co+0.4),
+						.5+.5*cos(6.2831*co+0.7),
+						1.0 );
+}
+)";
+
+
+
+
 HWND hwnd;
 HDC hdc;
 float angle;
 HGLRC hrc;
 unsigned int tex;
-
+GLuint Program;
 static int midWidth;
 
 static int screenHeight;
@@ -56,9 +101,8 @@ GdiplusStartupInput gdiplusStartupInput;
 ULONG_PTR gdiplusToken;
 
 BOOL CALLBACK EnumWindowsCallback(HWND tophandle, LPARAM topparamhandle);
-void drawWallVideo();
-int initFfmpeg();
 
+void initShader();
 
 void resize()
 {
@@ -99,10 +143,24 @@ void init()
 void draw()
 {
 	angle -= 1.f;
+	GLint timeLocation = glGetUniformLocation(Program, "time");
+	GLint resolutionLocation = glGetUniformLocation(Program, "resolution");
+	GLint centerLocation = glGetUniformLocation(Program, "center");
+	
+
 	float rtri = 0;
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glUseProgram(Program);
+
+	glUniform1f(timeLocation, angle);
+	glUniform2f(resolutionLocation, angle, angle);
+	glUniform2f(centerLocation, 0.f, 0.f);
+	
+
+
+
 	glTranslatef(0, 0, -5);
 	glRotatef(angle, 0, 1, 0);
 	glBindTexture(GL_TEXTURE_2D, tex);
@@ -122,7 +180,9 @@ void draw()
 
 	auto res = SwapBuffers(hdc);
 	res = GetLastError();
-	cout << GetLastError();
+	if (res != Status::Ok) {
+		cout << "Error swapping buffers: " << res;
+	}
 }
 
 int main()
@@ -135,19 +195,18 @@ int main()
 
 	EnumWindows(EnumWindowsCallback, NULL);
 
-	if (initFfmpeg() < 0) {
-		return -1;
-	}
-
 	hwnd = workerw;
 	hdc = GetDCEx(workerw, NULL, 0x403);
+
 	EnableOpenGL(hwnd, &hdc, &hrc);
+	auto res = glewInit();
+
 	init();
 	resize();
+	initShader();
 	cout<< hrc;
 
 	while (true) {
-		//drawWallVideo();
 		draw();
 		Sleep(2);
 	}
@@ -155,72 +214,6 @@ int main()
     return 0;
 }
 
-int initFfmpeg() {
-	av_register_all();
-
-
-	// Open video file
-	if (avformat_open_input(&pFormatCtx, "D:\\x.mp4", NULL, NULL) != 0)
-		return -1; // Couldn't open file
-
-				   // Retrieve stream information
-	if (avformat_find_stream_info(pFormatCtx, NULL)<0)
-		return -1; // Couldn't find stream information
-
-	// Find the first video stream
-	videoStream = -1;
-	for (i = 0; i<pFormatCtx->nb_streams; i++)
-		if (pFormatCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
-			videoStream = i;
-			break;
-		}
-	if (videoStream == -1)
-		return -1; // Didn't find a video stream
-
-				   // Get a pointer to the codec context for the video stream
-	pCodecCtx = pFormatCtx->streams[videoStream]->codec;
-
-	// Find the decoder for the video stream
-	pCodec = avcodec_find_decoder(pCodecCtx->codec_id);
-	if (pCodec == NULL) {
-		fprintf(stderr, "Unsupported codec!\n");
-		return -1; // Codec not found
-	}
-
-	// Open codec
-	if (avcodec_open2(pCodecCtx, pCodec, &optionsDict)<0)
-		return -1; // Could not open codec
-
-				   // Allocate video frame
-	pFrame = av_frame_alloc();
-	rgbFrame = av_frame_alloc();
-
-	auto numBytes = avpicture_get_size(PIX_FMT_RGB24, midWidth,
-		screenHeight);
-
-	auto buffer = (uint8_t *)av_malloc(numBytes * sizeof(uint8_t));
-
-	avpicture_fill((AVPicture *)rgbFrame, buffer, PIX_FMT_RGB24,
-		midWidth, screenHeight);
-
-	sws_ctx =
-		sws_getContext
-		(
-			pCodecCtx->width,
-			pCodecCtx->height,
-			pCodecCtx->pix_fmt,
-			midWidth,
-			screenHeight,
-			PIX_FMT_BGR24,
-			SWS_BILINEAR,
-			NULL,
-			NULL,
-			NULL
-		);
-
-	return 0;
-
-}
 
 BOOL CALLBACK EnumWindowsCallback(HWND tophandle, LPARAM topparamhandle)
 {
@@ -239,45 +232,6 @@ BOOL CALLBACK EnumWindowsCallback(HWND tophandle, LPARAM topparamhandle)
 	}
 	return true;
 }
-
-void drawWallVideo() {
-	unique_ptr<Bitmap> bmp;
-
-	auto ret = av_read_frame(pFormatCtx, &packet);
-	if (ret >= 0) {
-		if (packet.stream_index == videoStream) {
-			avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
-
-			if (frameFinished) {
-				sws_scale(sws_ctx, pFrame->data, pFrame->linesize, 0, pCodecCtx->height, rgbFrame->data, rgbFrame->linesize);
-				cout << "last error before bitmap: " << GetLastError() << endl;
-				bmp = make_unique<Bitmap>(midWidth, screenHeight, midWidth * 3, PixelFormat24bppRGB, rgbFrame->data[0]);
-				cout << "last error after bitmap: " << GetLastError() << endl;
-				cout << "bitmap status: " << bmp->GetLastStatus();
-			}
-		}
-	}
-	else {
-		av_seek_frame(pFormatCtx, videoStream, 0, AVSEEK_FLAG_ANY);
-	}
-
-	av_free_packet(&packet);
-
-
-	auto dc = GetDCEx(workerw, NULL, 0x403);
-	if (dc) {
-		Graphics grahics(dc);
-
-		if (bmp.get()) {
-			grahics.DrawImage(bmp.get(), 0, 0);
-		}
-
-		// Fill the rectangle.
-		//grahics.FillRectangle(&blackBrush, 0, 0, width, height);
-	}
-	ReleaseDC(workerw, dc);
-}
-
 
 void EnableOpenGL(HWND hwnd, HDC* hDC, HGLRC* hRC)
 {
@@ -305,4 +259,33 @@ void EnableOpenGL(HWND hwnd, HDC* hDC, HGLRC* hRC)
 	*hRC = wglCreateContext(*hDC);
 
 	wglMakeCurrent(*hDC, *hRC);
+}
+
+void initShader() {
+	GLuint fragment;
+	GLint success;
+
+	char initLog[512]{};
+	fragment = glCreateShader(GL_FRAGMENT_SHADER);
+	glShaderSource(fragment, 1, &SHADER, NULL);
+	glCompileShader(fragment);
+	glGetShaderiv(fragment, GL_COMPILE_STATUS, &success);
+
+	if (!success) {
+		glGetShaderInfoLog(fragment, 512, NULL, initLog);
+		std::cout << "Error::SHADER::FRAGMENT::COMPILATION_FAILED\n" << initLog << std::endl;
+	}
+
+	Program = glCreateProgram();
+	glAttachShader(Program, fragment);
+	glLinkProgram(Program);
+
+	glGetProgramiv(Program, GL_LINK_STATUS, &success);
+	if (!success)
+	{
+		glGetProgramInfoLog(Program, 512, NULL, initLog);
+		std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << initLog << std::endl;
+	}
+
+	glDeleteShader(fragment);
 }
